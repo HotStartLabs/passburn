@@ -281,13 +281,16 @@ Scanner-driven pass ahead of the portfolio composite screenshot:
     sees edge-injected content.
   - The other zones in the account still have automatic setup enabled and
     should be audited the same way.
-- CodeCanary monitors: both red since 2026-08-01 — correct drift detection of
+- CodeCanary monitors: both went red 2026-08-01 — correct drift detection of
   the 2026-07-31 security-fix deploy (`app.js` hash changed vs the 2026-07-20
-  baselines), not tampering. Re-verify pending: registration tokens were never
-  recorded, so the token hash must be rotated in KV (approved session or
-  manual dashboard edit) before POSTing `/canary/<id>/reverify`. Duplicate
-  monitor `48d2147cdfa5` (accidental re-registration 2026-07-20 16:27) to be
-  deleted; `b0f0b4c29dd2` (embedded badge, Tier-2 gold) is the keeper.
+  baselines), not tampering. Resolved 2026-08-05: the original registration
+  tokens were never recorded, so the token hash was rotated directly in KV
+  (record rebuilt from the public API + fresh SHA-256, gold-badge history
+  preserved) and `b0f0b4c29dd2` re-verified through the official endpoint at
+  16:44 UTC — green, new baseline matches the deployed code. The accidental
+  duplicate monitor `48d2147cdfa5` was deleted and the host index
+  consolidated. The new token lives in gitignored `.canary-token` — don't
+  lose it twice.
 - Post-beacon-removal scanner runs: codecanary.org **A+ zero findings**,
   securityheaders.com **A+**, Mozilla Observatory **A+ (130/100, 10/10)**.
 
