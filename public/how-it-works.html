@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>passburn — how it works</title>
+<meta name="description" content="How passburn's zero-knowledge one-time links work: split-key AES-256-GCM, encrypted in your browser, post-quantum safe by design.">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>pass<span class="accent">burn</span></h1>
+  <p class="tagline">How it works — and why we can't read your secrets.</p>
+</header>
+
+<main>
+  <div class="card prose">
+    <h2>Encrypted before it leaves your browser</h2>
+    <p>When you create a link, your browser generates two independent random
+    values: a <strong>public part</strong> and a <strong>private part</strong>.
+    Your secret is encrypted right there in the page with
+    <strong>AES-256-GCM</strong>, using a key derived (HKDF-SHA-256) from both
+    parts together. Only the resulting ciphertext and the private part are sent
+    to our server.</p>
+
+    <h2>Half the key never reaches us</h2>
+    <p>The public part goes into the link after the <code>#</code> symbol —
+    the URL fragment. Browsers never transmit fragments to servers, so that
+    half of the key exists only in the link itself. This means:</p>
+    <p>· Someone who steals our database can't decrypt anything — they don't
+    have the fragment.<br>
+    · Someone who intercepts the link can't get the data from us after it's
+    been viewed — it's already deleted.<br>
+    · We can't read your secret, ever. There is nothing to subpoena, leak, or
+    lose.</p>
+
+    <h2>Burns after reading</h2>
+    <p>Opening the page does <em>not</em> consume the secret — email scanners
+    and chat apps that pre-fetch links only ever see the confirmation screen.
+    The secret is released once, when the recipient explicitly clicks
+    <strong>Reveal</strong>, and the server deletes its copy in the same
+    operation. Every secret also has a hard expiry, whether or not it was
+    viewed.</p>
+
+    <h2>Live mode: never stored at all</h2>
+    <p>A <strong>live</strong> link goes one step further — the server never
+    holds the secret, not even encrypted. The secret stays in your open
+    browser tab. When the recipient opens the link and knocks, you see the
+    request in real time (with its approximate location) and choose to
+    approve or deny. On approval, the encrypted payload relays through the
+    server directly between the two browsers and the link burns the moment
+    the recipient confirms delivery. The server sees only ciphertext passing
+    through; close your tab and the link is simply dead.</p>
+
+    <h2>Optional password, done right</h2>
+    <p>If you set a password, it's stretched with PBKDF2 (600,000 iterations)
+    into two independent values: one is mixed into the encryption key, the
+    other acts as a check so a wrong guess doesn't consume the one allowed
+    view. The password itself is never sent to us — share it over a different
+    channel than the link.</p>
+
+    <p>Guessing is capped. After 25 wrong attempts the secret destroys itself
+    and the sender is told, because anyone guessing passwords at a link
+    already has the link — at that point the safe outcome is a dead secret
+    and a warned sender, not a longer guessing game.</p>
+
+    <h2>Post-quantum safe by design</h2>
+    <p>passburn uses only symmetric cryptography — there is no key exchange
+    and no public-key crypto anywhere in the design, so there is nothing for
+    a future quantum computer to harvest today and break later. Against
+    AES-256, Grover's algorithm still leaves a 128-bit security margin.</p>
+
+    <h2>Attachments</h2>
+    <p>Files are sliced into 256&nbsp;KB chunks, each encrypted in your
+    browser with the same key and bound to its exact position — the server
+    stores opaque blobs it cannot read, reorder, or substitute. Filenames are
+    encrypted too.</p>
+
+    <h2>The boring, important parts</h2>
+    <p>Everything is served over HTTPS with strict security headers (CSP with
+    Trusted Types, HSTS preload, full cross-origin isolation). The pages load
+    no external JavaScript, set no cookies, and run no analytics or tracking.
+    Fragments never appear in our logs because they never arrive.</p>
+
+    <p>One request does leave our origin, and we'd rather name it than claim a
+    round number: the badge at the bottom of this page is an image served by
+    <a href="https://codecanary.org/status/b0f0b4c29dd2" rel="noopener">codecanary.org</a>,
+    a site the same people run. It publicly attests that the JavaScript you
+    just loaded is the code we published — the check that matters most for
+    browser-side encryption, since a silently swapped script could betray you
+    and nothing else on this page would notice. Loading it tells that site
+    your IP address and the time you opened the page. It is never told the
+    link, the fragment, or anything about the secret.</p>
+  </div>
+</main>
+
+<footer><a href="/">create a secret</a> · encrypted in your browser · burns after reading<br>
+<a href="https://codecanary.org/status/b0f0b4c29dd2" rel="noopener"><img src="https://codecanary.org/badge/b0f0b4c29dd2.svg" alt="CodeCanary: JavaScript integrity status" height="22"></a></footer>
+</body>
+</html>

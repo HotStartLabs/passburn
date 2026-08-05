@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>passburn — one-time secret links that burn after reading</title>
+<meta name="description" content="Share a password or file with a link that self-destructs after it's viewed. Encrypted in your browser — the server can never read it.">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>pass<span class="accent">burn</span></h1>
+  <p class="tagline">One-time secret links. Read once, then it burns.</p>
+</header>
+
+<main>
+  <noscript>
+    <div class="card">
+      <p><strong>JavaScript is required.</strong></p>
+      <p class="hint">passburn encrypts everything in your browser before it's sent — that can't happen without JavaScript. Enable it and reload.</p>
+    </div>
+  </noscript>
+  <div class="card" id="create-card">
+    <div class="mode-row" id="mode-row">
+      <label class="mode">
+        <input type="radio" name="mode" value="stored" checked>
+        <span><strong>Stored</strong><small>Recipient opens anytime before expiry. Encrypted at rest; we hold half the key.</small></span>
+      </label>
+      <label class="mode">
+        <input type="radio" name="mode" value="live">
+        <span><strong>Live</strong><small>Never stored — relayed from this tab when you approve. You watch it happen.</small></span>
+      </label>
+    </div>
+    <textarea id="secret" placeholder="Paste a password, API key, or anything secret. It's encrypted in your browser before it leaves this page." spellcheck="false" autocomplete="off"></textarea>
+    <div class="btn-row">
+      <button id="gen-btn">Generate a strong password</button>
+      <button id="file-btn">Attach a file</button>
+    </div>
+    <div id="file-list"></div>
+    <input type="file" id="file-input" multiple hidden>
+
+    <div class="options">
+      <label>Expires
+        <select id="expiry">
+          <option value="3600">1 hour</option>
+          <option value="86400" selected>24 hours</option>
+          <option value="259200">3 days</option>
+          <option value="604800">7 days</option>
+        </select>
+      </label>
+      <label>Views
+        <select id="views">
+          <option value="1" selected>1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="5">5</option>
+          <option value="10">10</option>
+        </select>
+      </label>
+      <label class="grow">Password <span class="opt">(optional)</span>
+        <span class="pw-wrap">
+          <input type="password" id="password" placeholder="Share it separately" autocomplete="off" spellcheck="false">
+          <button type="button" id="pw-toggle" aria-label="Show password">Show</button>
+        </span>
+      </label>
+    </div>
+
+    <p class="err hidden" id="create-err"></p>
+    <div class="btn-row">
+      <button class="primary" id="create-btn">Create one-time link</button>
+      <span class="hint hidden" id="busy"></span>
+    </div>
+    <p class="hint" id="caps-hint">Up to 5 files, 25&nbsp;MB total. The optional password is never sent to the server — share it over a different channel than the link.</p>
+  </div>
+
+  <div class="card hidden" id="result-card">
+    <p class="ok-note">Your one-time link is ready.</p>
+    <input id="link-out" readonly spellcheck="false">
+    <div class="btn-row">
+      <button class="primary" id="copy-link">Copy link</button>
+      <button id="email-link">Share via email</button>
+      <button id="another">Create another</button>
+    </div>
+    <p class="hint" id="summary"></p>
+    <div id="qr-holder"></div>
+    <div id="sender-panel" class="hidden">
+      <p class="status-line" id="ws-status"></p>
+      <div id="knock-box" class="hidden">
+        <p><strong>Someone is requesting this secret.</strong> <span class="hint" id="knock-from"></span></p>
+        <div class="btn-row">
+          <button class="primary" id="approve-btn">Approve &amp; send</button>
+          <button id="deny-btn">Deny</button>
+        </div>
+      </div>
+      <div id="send-progress"></div>
+    </div>
+    <p class="hint warn-note" id="result-warn">Save the link now — it can't be recovered later, not even by us. The part after # never reaches our servers.</p>
+  </div>
+</main>
+
+<footer>Encrypted in your browser · burns after reading · <a href="/how-it-works">how it works</a><br>
+<a href="https://codecanary.org/status/b0f0b4c29dd2" rel="noopener"><img src="https://codecanary.org/badge/b0f0b4c29dd2.svg" alt="CodeCanary: JavaScript integrity status" height="22"></a></footer>
+
+<script src="/qrcode.js"></script>
+<script src="/crypto.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

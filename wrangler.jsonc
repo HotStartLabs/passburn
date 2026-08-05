@@ -1,0 +1,39 @@
+{
+  "name": "passburn",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-07-01",
+  // Overridden to "dev" by .dev.vars under `wrangler dev`, which gates the
+  // https redirect (local dev serves plain http).
+  "vars": { "ENVIRONMENT": "production" },
+  // The app is reachable only at its custom domains. Both of these default to
+  // on for new Workers, and either would serve the whole app on an origin
+  // outside the canonical-redirect, HSTS and CSP story — a second front door
+  // to a credential-sharing product is not worth the convenience.
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "passburn.com", "custom_domain": true },
+    { "pattern": "www.passburn.com", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    // Run the worker before serving assets so scheme/host redirects and
+    // security headers apply to every request.
+    "run_worker_first": true
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SECRETS",
+        "class_name": "Secret"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["Secret"]
+    }
+  ]
+}

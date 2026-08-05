@@ -1,0 +1,13 @@
+{
+  "name": "passburn",
+  "version": "1.0.0",
+  "private": true,
+  "description": "One-time encrypted secret links. Share a password, it burns after reading.",
+  "scripts": {
+    "dev": "wrangler dev --port 8788",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

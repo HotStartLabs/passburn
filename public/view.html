@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>passburn — you've received a secret</title>
+<meta name="description" content="Someone sent you a one-time secret. It burns after reading.">
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>pass<span class="accent">burn</span></h1>
+  <p class="tagline">Someone sent you a one-time secret.</p>
+</header>
+
+<main>
+  <noscript>
+    <div class="card">
+      <p><strong>JavaScript is required.</strong></p>
+      <p class="hint">This secret can only be decrypted in your browser — that can't happen without JavaScript. Enable it and reload; the secret has not been used up.</p>
+    </div>
+  </noscript>
+  <div class="card hidden" id="reveal-card">
+    <p id="reveal-hint" class="hint"></p>
+    <div class="options hidden" id="pw-row">
+      <label class="grow">This secret requires a password
+        <span class="pw-wrap">
+          <input type="password" id="pw-input" placeholder="Password from the sender" autocomplete="off" spellcheck="false">
+          <button type="button" id="pw-toggle" aria-label="Show password">Show</button>
+        </span>
+      </label>
+    </div>
+    <p class="err hidden" id="reveal-err"></p>
+    <div class="btn-row">
+      <button class="primary" id="reveal-btn">Reveal secret</button>
+    </div>
+  </div>
+
+  <div class="card hidden" id="secret-card">
+    <textarea id="secret-out" readonly spellcheck="false"></textarea>
+    <div class="btn-row">
+      <button class="primary" id="copy-btn">Copy</button>
+    </div>
+    <div id="attachments"></div>
+    <p class="hint warn-note" id="burn-note"></p>
+  </div>
+
+  <div class="card hidden" id="wait-card">
+    <p><strong>Knocking…</strong></p>
+    <p class="hint" id="wait-text">Contacting the sender…</p>
+  </div>
+
+  <div class="card hidden" id="live-offline-card">
+    <p><strong>The sender isn't online.</strong></p>
+    <p class="hint">This is a live link — the secret exists only in the sender's open browser tab and is never stored on a server. Ask the sender to open their passburn tab, then try again.</p>
+    <div class="btn-row"><button class="primary" id="retry-live">Try again</button></div>
+  </div>
+
+  <div class="card hidden" id="denied-card">
+    <p><strong>The sender declined.</strong></p>
+    <p class="hint">They saw your request and chose not to release the secret right now. If you were expecting it, check with them directly.</p>
+  </div>
+
+  <div class="card hidden" id="gone-card">
+    <p><strong>This secret is gone.</strong></p>
+    <p class="hint">It was already viewed, expired, never existed, or was destroyed after too many wrong password attempts. If you were expecting it and didn't view it, tell the sender — someone else may have opened the link first.</p>
+  </div>
+
+  <div class="card hidden" id="not-ready-card">
+    <p><strong>Almost there.</strong></p>
+    <p class="hint">The sender is still uploading attachments. Try again in a moment.</p>
+    <div class="btn-row"><button class="primary" id="retry-ready">Try again</button></div>
+  </div>
+
+  <div class="card hidden" id="bad-card">
+    <p><strong>This link doesn't work.</strong></p>
+    <p class="hint" id="bad-text">The link is incomplete — the part after # is missing. Ask the sender to copy the whole link, including the #fragment.</p>
+  </div>
+</main>
+
+<footer>Encrypted in your browser · burns after reading · <a href="/how-it-works">how it works</a><br>
+<a href="https://codecanary.org/status/b0f0b4c29dd2" rel="noopener"><img src="https://codecanary.org/badge/b0f0b4c29dd2.svg" alt="CodeCanary: JavaScript integrity status" height="22"></a></footer>
+
+<script src="/crypto.js"></script>
+<script src="/view.js"></script>
+</body>
+</html>
