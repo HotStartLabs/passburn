@@ -3,6 +3,8 @@
 One-time secret links. Paste a password or API key (optionally attach files),
 get a link that burns after reading. No account, no install.
 
+[![passburn home page: choose stored or live mode, paste a secret, set expiry, views and an optional password, create a one-time link](docs/screenshot.png)](https://passburn.com)
+
 Live at [passburn.com](https://passburn.com). Sibling project of
 [pastecmd.com](https://pastecmd.com); see `ARCHITECTURE.md` for the full plan.
 Phase 1 (stored mode) and phase 2 (live mode + viewed notifications) are
