@@ -3,3 +3,4 @@ node_modules/
 .dev.vars
 .canary-token
 .canary-pending-kv/
+.claude/settings.local.json

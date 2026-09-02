@@ -124,7 +124,8 @@ built; phase 3 items (secret requests, bulk CSV, Turnstile) remain optional.
 
 ```
 npm install
-npm run dev        # http://localhost:8788
+cp .dev.vars.example .dev.vars   # sets ENVIRONMENT=dev so localhost is not redirected to https
+npm run dev                      # http://localhost:8788
 ```
 
 Create a secret on the home page, open the generated `/s/...#...` link
@@ -134,9 +135,10 @@ Create a secret on the home page, open the generated `/s/...#...` link
 
 1. `npx wrangler login`
 2. `npm run deploy`
-3. Custom domains `passburn.com` and `www.passburn.com` are configured in
-   the dashboard under Workers & Pages → passburn → Settings → Domains &
-   Routes (nameservers already point at Cloudflare).
+3. The custom domains in `wrangler.jsonc` (`passburn.com`, `www.passburn.com`)
+   are bound to the Worker in the Cloudflare dashboard under Workers & Pages →
+   passburn → Settings → Domains & Routes. To deploy your own instance, change
+   those two route patterns to a zone on your account first.
 
 ## Hardening state (2026-07-15)
 
@@ -299,3 +301,7 @@ Scanner-driven pass ahead of the portfolio composite screenshot:
 Free tier: Workers requests plus SQLite-backed DO storage (5 GB) comfortably
 cover showcase traffic. Worst case for storage is ~200 concurrent maxed-out
 25 MB links — the alarm-based wipe keeps steady-state near zero.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

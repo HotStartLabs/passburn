@@ -1,0 +1,3 @@
+# Copy to .dev.vars (gitignored). Any value other than "production" disables
+# the https redirect so `wrangler dev` can serve plain http on localhost.
+ENVIRONMENT=dev
