@@ -90,7 +90,9 @@ free tier supports these):
 - The DO is single-threaded, so claim-and-delete is inherently atomic — two
   simultaneous opens cannot both win. No conditional-update tricks.
 - Expiry = pastecmd's alarm pattern: `storage.setAlarm(expiresAt)`,
-  `alarm() → deleteAll()`. Delete immediately when `viewsRemaining` hits 0.
+  `alarm() → tombstone()`. Wipe immediately when `viewsRemaining` hits 0.
+  Every end (burn, expiry, kill, live delivery) leaves a 30-day tombstone
+  so the id can't be re-created by someone holding the link.
 - Live mode: the DO stores no payload, only relays — reuse pastecmd's
   `Session` class behaviors (control-prefix protection, message size cap,
   peer handling).

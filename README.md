@@ -302,6 +302,84 @@ Scanner-driven pass ahead of the portfolio composite screenshot:
 - Post-beacon-removal scanner runs: codecanary.org **A+ zero findings**,
   securityheaders.com **A+**, Mozilla Observatory **A+ (130/100, 10/10)**.
 
+## Security review (2026-09-23)
+
+Second full-codebase pass; no critical or high findings. Everything confirmed
+sound on 2026-07-31 still holds. Fixed in this pass:
+
+- **Burned ids could be re-created — defeating tamper evidence (medium).**
+  Every terminal path (final view, password-attempt kill, live delivery,
+  expiry) wiped the Durable Object to empty, so the id was free again and
+  anyone holding the full link could `PUT` a new secret under it — choosing
+  their own private part, with the public part from the link, so it decrypted
+  cleanly. An interceptor could read a secret and re-plant it, and the real
+  recipient would see content instead of "gone" — the exact signal the email
+  template tells them to report. Every terminal path now leaves a
+  `tombstone` key for 30 days (a few bytes; its own alarm frees the id
+  afterwards), and `create` refuses a tombstoned id.
+- **Sender tab looped on "reconnecting…" after its link died (low).** A
+  sender socket that dropped while the link was claimed, expired or killed got
+  `4003` on reconnect, which the client treated as transient and retried
+  forever — so the sender never learned the link was gone. `4003` is now
+  terminal, with a status line that says so.
+- **Idle sockets could lock out the sender (low).** Sockets that never send a
+  first message sat in `pending` indefinitely; 16 of them from a link-holder
+  filled `MAX_SOCKETS` and kept the real sender (and live recipient) out. At
+  the cap, the oldest pending socket is now evicted (`4008`) instead of the
+  new connection being refused. Evicted sockets are marked before closing: a
+  server-closed socket can linger in `getWebSockets()` while its close
+  handshake finishes (locally, one that never sent a frame stays CLOSING
+  indefinitely — true of the pre-existing `closeAll` path too), and the mark
+  keeps it from holding a slot or being picked twice.
+- **Back button could restore a revealed secret (low).** HTML was served with
+  the asset default (`max-age=0, must-revalidate`), which is bfcache-eligible:
+  navigate away from a revealed stored secret, press Back, and the plaintext
+  was on screen again. HTML responses are now `Cache-Control: no-store`
+  (JS/CSS stay cacheable), the view page wipes the secret and attachments on a
+  persisted `pagehide`, and `#secret-out` has `autocomplete="off"`.
+- **Downloads trusted the sender's MIME type and leaked blob URLs (low).**
+  Decrypted files became same-origin `blob:` URLs typed with the
+  sender-declared MIME. Inert today (the `download` attribute plus CSP), but
+  every download is now `application/octet-stream`, and each object URL is
+  revoked 40 s after the click instead of pinning up to 50 MB for the life of
+  the tab.
+- **Chunk sizes were bounded, not exact (low).** Any 13 B – 300 KB chunk was
+  accepted, so stored bytes could run ~25% past the per-secret cap. Each
+  chunk's length is now required to be exactly `12 + slice + 16`, where the
+  slice follows from the declared size (a short final slice, 0 for an empty
+  file).
+- **Approve wasn't bound to a specific knock (low).** If recipient A left and
+  B knocked in the instant before the sender clicked Approve, the click
+  released the secret to B under A's displayed location. Each knock now
+  carries a random id the sender must echo in `approve`/`deny`;
+  `recipient-gone` is tagged with it so a stale reply can't hide a newer knock.
+- The `.workers.dev` exemption in the canonical-host redirect is gone — dead
+  code since `workers_dev: false`, and removing it makes a re-enabled
+  workers.dev origin redirect instead of serving the app.
+
+Verified against `wrangler dev` with a scripted client (28 checks): burned and
+killed ids refuse re-creation, the expiry alarm leaves a tombstone, exact
+chunk lengths (full, short tail, empty file) accept and anything else is
+rejected, stale/missing knock ids don't approve, eviction targets the oldest
+idle socket each time without overflowing, a post-burn sender reconnect gets
+`4003`, and `/` and `/s/<id>` are `no-store` while JS is not.
+
+Open:
+
+- **Storage-exhaustion abuse (medium on the free plan).** The WAF rule allows
+  ~1 create/s per IP with `/chunks/` excluded, and each create may hold 25 MB
+  for 7 days — one IP can fill the 5 GB free-tier DO storage in minutes,
+  which would fail stored mode for everyone until alarms clear it. Candidate
+  fixes: a Workers Rate Limiting binding on creates that carry files (no
+  third-party script), a shorter max expiry for attachments, or Turnstile
+  (which would break `script-src 'self'`). Undecided.
+- `/live/` WebSocket connects are still not covered by the WAF rule (see the
+  2026-07-31 section) — dashboard change.
+- Not changed: live-mode recipients aren't told the sender sees their coarse
+  location; `img-src blob:` is unused; `npm audit` reports high-severity
+  `undici` advisories via `wrangler` → `miniflare` (dev toolchain only,
+  nothing shipped).
+
 ## Costs
 
 Free tier: Workers requests plus SQLite-backed DO storage (5 GB) comfortably

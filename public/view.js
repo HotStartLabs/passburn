@@ -292,16 +292,10 @@
       t.bar.querySelector("i").style.width = `${Math.round(t.got / t.chunks * 100)}%`;
       if (t.got === t.chunks) {
         t.bar.remove();
-        const blob = new Blob(t.parts, { type: t.meta.mime || "application/octet-stream" });
         const btn = document.createElement("button");
         btn.className = "primary";
         btn.textContent = "Download";
-        btn.onclick = () => {
-          const a = document.createElement("a");
-          a.href = URL.createObjectURL(blob);
-          a.download = t.meta.name || "file";
-          a.click();
-        };
+        btn.onclick = () => saveBlob(t.parts, t.meta.name);
         t.row.append(btn);
         t.subEl.textContent = `${fmtSize(t.meta.size)} · decrypted ✓`;
         doneFiles++;
@@ -314,6 +308,34 @@
       try { ws.send(JSON.stringify({ t: "received" })); } catch {}
     }
   }
+
+  // The sender picks the declared MIME type, so it's never used: every blob
+  // is application/octet-stream. A same-origin blob: URL typed text/html is a
+  // document on passburn.com — the download attribute and CSP keep it inert
+  // today, but a type that can't render removes the question. Revoked after
+  // a delay (not at once: some browsers start the download asynchronously),
+  // so a decrypted 50 MB file doesn't stay pinned in memory.
+  function saveBlob(parts, name) {
+    const url = URL.createObjectURL(new Blob(parts, { type: "application/octet-stream" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name || "file";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 40_000);
+  }
+
+  // Leaving the page must not leave the plaintext restorable with Back.
+  // The worker sends no-store (which keeps most engines from caching the
+  // page at all); this covers engines that cache it anyway. The page is
+  // frozen right after pagehide, so what's cached is the wiped DOM.
+  addEventListener("pagehide", (e) => {
+    if (!e.persisted || $("secret-card").classList.contains("hidden")) return;
+    $("secret-out").value = "";
+    $("attachments").replaceChildren();
+    $("bad-text").textContent =
+      "The secret was cleared from this page when you navigated away, so the Back button can't bring it back.";
+    show("bad-card");
+  });
 
   function showSecret(text, note) {
     if (text) {
@@ -379,11 +401,7 @@
             key, frame.subarray(0, 12), frame.subarray(12), PB.aadChunk(fileIdBytes, i)));
           bar.querySelector("i").style.width = `${Math.round((i + 1) / f.chunks * 100)}%`;
         }
-        const blob = new Blob(parts, { type: meta.mime || "application/octet-stream" });
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = meta.name || "file";
-        a.click();
+        saveBlob(parts, meta.name);
         subEl.textContent = `${fmtSize(meta.size)} · decrypted ✓`;
         btn.disabled = false;
       } catch {

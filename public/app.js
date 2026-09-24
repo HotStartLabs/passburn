@@ -346,6 +346,7 @@
   function startSender(cfg) {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     let ws = null, retryDelay = 500, done = false, sending = false, recipientGone = false;
+    let knock = null; // id of the knock on screen — Approve/Deny apply to it alone
     const setStatus = (cls, text) => {
       $("ws-status").className = "status-line " + cls;
       $("ws-status").textContent = text;
@@ -370,6 +371,7 @@
           setStatus("ok", idleText);
         } else if (msg.t === "knock" && cfg.live) {
           recipientGone = false;
+          knock = msg.knock;
           const geo = msg.from && (msg.from.city || msg.from.country)
             ? ` Request came from ${[msg.from.city, msg.from.country].filter(Boolean).join(", ")}.`
             : "";
@@ -378,7 +380,10 @@
           $("knock-box").classList.remove("hidden");
           setStatus("warn", "Recipient at the door — approve to send.");
         } else if (msg.t === "recipient-gone") {
+          // About an earlier knock than the one on screen — stale, ignore.
+          if (msg.knock && knock && msg.knock !== knock) return;
           hideKnock();
+          knock = null;
           if (sending) recipientGone = true;
           else setStatus("", "Recipient left before delivery. " + idleText);
         } else if (msg.t === "send-payload") {
@@ -415,6 +420,15 @@
           setStatus("err", "Expired — this link is dead.");
           return;
         }
+        // 4003: the server no longer accepts our token, which only happens
+        // once the link is dead — it ended while this tab was disconnected.
+        // Retrying would spin on "reconnecting…" forever and hide that.
+        if (ev.code === 4003) {
+          done = true;
+          hideKnock();
+          setStatus("err", "This link is gone — it was viewed, expired, or destroyed while this tab was disconnected. If you didn't expect it to be viewed yet, create a fresh one.");
+          return;
+        }
         hideKnock();
         setStatus("err", "Connection lost — reconnecting…");
         setTimeout(() => { if (!done) connect(); }, retryDelay);
@@ -425,12 +439,12 @@
 
     $("approve-btn").onclick = () => {
       hideKnock();
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "approve" }));
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "approve", knock }));
     };
     $("deny-btn").onclick = () => {
       hideKnock();
       setStatus("", "Denied. " + idleText);
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "deny" }));
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "deny", knock }));
     };
 
     // Encrypt-at-approval: key material and plaintext live only in this tab

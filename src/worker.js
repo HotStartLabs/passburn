@@ -23,8 +23,15 @@ const MAX_VIEWS = 10;
 const MIN_EXPIRY_S = 5 * 60;
 const MAX_EXPIRY_S = 7 * 24 * 3600;
 // After the final view, attachment chunks stay downloadable (claim token
-// required) for this long, then the alarm wipes everything.
+// required) for this long, then the alarm wipes everything but a tombstone.
 const CLAIM_GRACE_MS = 10 * 60 * 1000;
+// Every way a secret ends leaves a tombstone for this long. Without one, a
+// wiped id is free again, and anyone holding the full link could re-create a
+// secret under it — so a reader who intercepted the link could re-plant it
+// and the real recipient would see content instead of the "gone" warning.
+const TOMBSTONE_MS = 30 * 24 * 3600 * 1000;
+const GCM_IV_BYTES = 12;
+const GCM_TAG_BYTES = 16;
 
 // Live mode caps. Larger than stored mode because nothing rests on disk —
 // chunks pass through the DO one message at a time (pastecmd allows the same).
@@ -165,11 +172,24 @@ export class Secret {
     // per-socket state rides in the attachment, so a parked sender tab costs
     // nothing while it waits.
     if (request.headers.get("Upgrade") === "websocket") {
-      if (this.ctx.getWebSockets().length >= MAX_SOCKETS) {
-        const rejectPair = new WebSocketPair();
-        rejectPair[1].accept();
-        rejectPair[1].close(4001, "full");
-        return new Response(null, { status: 101, webSocket: rejectPair[0] });
+      const sockets = this.ctx.getWebSockets().filter((ws) => this.att(ws).role !== "evicted");
+      if (sockets.length >= MAX_SOCKETS) {
+        // A socket that never finished its handshake holds a slot for free:
+        // without eviction, 16 idle connects from a link-holder would lock
+        // the real sender (and recipient) out. Evict the oldest such socket;
+        // it's marked first so a close that lingers can't be picked twice.
+        const idle = sockets
+          .filter((ws) => this.att(ws).role === "pending")
+          .sort((a, b) => (this.att(a).at || 0) - (this.att(b).at || 0))[0];
+        if (idle) {
+          idle.serializeAttachment({ role: "evicted" });
+          try { idle.close(4008, "evicted"); } catch {}
+        } else {
+          const rejectPair = new WebSocketPair();
+          rejectPair[1].accept();
+          rejectPair[1].close(4001, "full");
+          return new Response(null, { status: 101, webSocket: rejectPair[0] });
+        }
       }
       const pair = new WebSocketPair();
       this.ctx.acceptWebSocket(pair[1]);
@@ -177,6 +197,7 @@ export class Secret {
       // socket knocks, so they can sanity-check who's asking.
       pair[1].serializeAttachment({
         role: "pending",
+        at: Date.now(),
         geo: request.cf ? { country: request.cf.country ?? null, city: request.cf.city ?? null } : null,
       });
       return new Response(null, { status: 101, webSocket: pair[0] });
@@ -256,10 +277,20 @@ export class Secret {
     }
   }
 
+  // The end of every secret: wipe everything but a tombstone that keeps the
+  // id from being re-created (see TOMBSTONE_MS). deleteAll() doesn't touch
+  // the alarm; setAlarm replaces it with the tombstone's own cleanup.
+  async tombstone() {
+    await this.ctx.storage.deleteAll();
+    await this.ctx.storage.put("tombstone", true);
+    await this.ctx.storage.setAlarm(Date.now() + TOMBSTONE_MS);
+  }
+
   async create(raw) {
     if (await this.ctx.storage.get("meta")) return json(409, { error: "exists" });
     if (await this.ctx.storage.get("live")) return json(409, { error: "exists" });
     if (await this.ctx.storage.get("burned")) return json(409, { error: "exists" });
+    if (await this.ctx.storage.get("tombstone")) return json(409, { error: "exists" });
 
     let body;
     try {
@@ -361,8 +392,7 @@ export class Secret {
         if (attempts >= MAX_BAD_PW_TOTAL) {
           this.notifySenders({ t: "killed" });
           this.closeAll("too many password attempts");
-          await this.ctx.storage.deleteAlarm();
-          await this.ctx.storage.deleteAll();
+          await this.tombstone();
           return json(404, { gone: true });
         }
         await this.ctx.storage.put("attempts", attempts);
@@ -407,8 +437,7 @@ export class Secret {
       }
     } else if (meta.views < 1) {
       // Final view, nothing left to download: burn immediately.
-      await this.ctx.storage.deleteAlarm();
-      await this.ctx.storage.deleteAll();
+      await this.tombstone();
     } else {
       await this.ctx.storage.put("meta", meta);
     }
@@ -431,7 +460,11 @@ export class Secret {
     const file = meta.files.find((f) => f.fileId === fileId);
     if (!file || index >= file.chunks) return json(400, { error: "bad chunk" });
 
-    if (!buf || buf.byteLength < 13 || buf.byteLength > MAX_CHUNK_BYTES) {
+    // Every chunk's length follows from the declared size — iv + slice + tag,
+    // the last slice short — so stored bytes are bounded exactly, not by
+    // chunk count × the per-message cap.
+    const plainLen = Math.min(CHUNK_PLAINTEXT_BYTES, file.size - index * CHUNK_PLAINTEXT_BYTES);
+    if (!buf || buf.byteLength !== GCM_IV_BYTES + plainLen + GCM_TAG_BYTES) {
       return json(400, { error: "bad chunk size" });
     }
     const key = `chunk:${fileId}:${index}`;
@@ -492,8 +525,8 @@ export class Secret {
     }
 
     if (att.role === "sender") {
-      if (msg.t === "approve") return this.wsApprove(ws);
-      if (msg.t === "deny") return this.wsDeny(ws);
+      if (msg.t === "approve") return this.wsApprove(ws, msg);
+      if (msg.t === "deny") return this.wsDeny(ws, msg);
       if (msg.t === "payload") return this.wsPayload(ws, msg);
       return;
     }
@@ -532,8 +565,7 @@ export class Secret {
       if (attempts >= MAX_BAD_PW_TOTAL) {
         this.notifySenders({ t: "killed" });
         this.closeAll("too many password attempts");
-        await this.ctx.storage.deleteAlarm();
-        await this.ctx.storage.deleteAll();
+        await this.tombstone();
         return;
       }
       const tries = (att.tries || 0) + 1;
@@ -555,15 +587,28 @@ export class Secret {
       return;
     }
 
-    ws.serializeAttachment({ ...att, role: "recipient", state: "knocking" });
+    // Each knock gets an id the sender must echo back, so an Approve click
+    // releases the secret to the knock the sender actually saw — not to a
+    // different recipient who knocked in the instant after the first left.
+    const knock = b64url(crypto.getRandomValues(new Uint8Array(9)));
+    ws.serializeAttachment({ ...att, role: "recipient", state: "knocking", knock });
     this.sendJson(ws, { t: "waiting" });
-    for (const s of senders) this.sendJson(s, { t: "knock", from: att.geo || null });
+    for (const s of senders) this.sendJson(s, { t: "knock", knock, from: att.geo || null });
   }
 
-  wsApprove(ws) {
-    const rec = this.peers("recipient").find((w) => this.att(w).state === "knocking");
+  knocking(msg) {
+    return this.peers("recipient").find((w) => {
+      const a = this.att(w);
+      return a.state === "knocking" && typeof msg.knock === "string" && a.knock === msg.knock;
+    });
+  }
+
+  wsApprove(ws, msg) {
+    const rec = this.knocking(msg);
     if (!rec) {
-      this.sendJson(ws, { t: "recipient-gone" });
+      // Tagged with the knock the sender clicked on, so a tab already showing
+      // a newer knock ignores this rather than hiding it.
+      this.sendJson(ws, { t: "recipient-gone", knock: msg.knock });
       return;
     }
     rec.serializeAttachment({ ...this.att(rec), state: "approved" });
@@ -573,13 +618,13 @@ export class Secret {
     this.sendJson(ws, { t: "send-payload" });
   }
 
-  wsDeny(ws) {
-    const rec = this.peers("recipient").find((w) => this.att(w).state === "knocking");
+  wsDeny(ws, msg) {
+    const rec = this.knocking(msg);
     if (!rec) return;
     this.sendJson(rec, { t: "denied" });
     try { rec.close(4006, "denied"); } catch {}
     // The registration survives a deny — the sender can approve a later knock.
-    this.notifySenders({ t: "recipient-gone" }, ws);
+    this.notifySenders({ t: "recipient-gone", knock: msg.knock }, ws);
   }
 
   wsPayload(ws, msg) {
@@ -603,8 +648,7 @@ export class Secret {
     // Recipient confirmed full delivery: the link's one shot is spent.
     this.notifySenders({ t: "received" });
     this.closeAll("delivered");
-    await this.ctx.storage.deleteAlarm();
-    await this.ctx.storage.deleteAll();
+    await this.tombstone();
   }
 
   webSocketClose(ws) {
@@ -621,7 +665,7 @@ export class Secret {
       // Mid-knock or mid-delivery drop: tell the sender; the registration
       // stays alive so they can approve a retry (delivery isn't confirmed
       // until the recipient acks, so nothing is considered spent).
-      this.notifySenders({ t: "recipient-gone" });
+      this.notifySenders({ t: "recipient-gone", knock: att.knock });
     } else if (att.role === "sender" && this.peers("sender", ws).length === 0) {
       for (const rec of this.peers("recipient")) {
         this.sendJson(rec, { t: "sender-offline" });
@@ -631,8 +675,14 @@ export class Secret {
   }
 
   async alarm() {
+    // A tombstone's own alarm: the retention window is over, free the id.
+    if (await this.ctx.storage.get("tombstone")) {
+      await this.ctx.storage.deleteAll();
+      return;
+    }
+    // Expiry, or the end of a final view's download grace window.
     this.closeAll("expired");
-    await this.ctx.storage.deleteAll();
+    await this.tombstone();
   }
 }
 
@@ -651,7 +701,7 @@ export default {
       delete headers["Strict-Transport-Security"];
       return new Response(null, { status: 301, headers });
     }
-    if (!isDev && url.hostname !== "passburn.com" && !url.hostname.endsWith(".workers.dev")) {
+    if (!isDev && url.hostname !== "passburn.com") {
       url.hostname = "passburn.com";
       return new Response(null, {
         status: 301,
@@ -700,6 +750,12 @@ export default {
     const res = await env.ASSETS.fetch(request);
     const headers = new Headers(res.headers);
     for (const [k, v] of Object.entries(securityHeaders(isDev))) headers.set(k, v);
+    // Pages hold plaintext once used (a revealed secret, a freshly typed
+    // one): no-store keeps them out of the back/forward cache, so the Back
+    // button on a shared machine can't restore them. JS/CSS stay cacheable.
+    if ((headers.get("Content-Type") || "").startsWith("text/html")) {
+      headers.set("Cache-Control", "no-store");
+    }
     return new Response(res.body, { status: res.status, headers });
   },
 };
