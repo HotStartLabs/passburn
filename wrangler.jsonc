@@ -27,6 +27,11 @@
       {
         "name": "SECRETS",
         "class_name": "Secret"
+      },
+      {
+        // One global instance: the storage quota ledger (see worker.js).
+        "name": "QUOTA",
+        "class_name": "Quota"
       }
     ]
   },
@@ -34,6 +39,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["Secret"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["Quota"]
     }
   ]
 }

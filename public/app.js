@@ -154,6 +154,20 @@
     }
   };
 
+  // The server refuses creates past its storage quota (per network per day,
+  // and globally); say which, since "server said 429" helps nobody.
+  async function createError(res) {
+    const body = await res.json().catch(() => ({}));
+    if (body.error === "daily quota") {
+      return new Error("Your network has reached today's storage limit. Try again tomorrow.");
+    }
+    if (body.error === "capacity") {
+      return new Error("passburn is at storage capacity right now. Try again later.");
+    }
+    if (res.status === 429) return new Error("Too many requests — wait a few seconds and try again.");
+    return new Error(`server said ${res.status}`);
+  }
+
   async function create(text) {
     const id = PB.b64url.encode(PB.randomBytes(16));
     const pubBytes = PB.randomBytes(16);
@@ -201,7 +215,7 @@
         files: manifest.map((m) => m.wire),
       }),
     });
-    if (!res.ok) throw new Error(`server said ${res.status}`);
+    if (!res.ok) throw await createError(res);
     const { senderToken, uploadToken } = await res.json();
 
     for (const m of manifest) {
@@ -255,7 +269,7 @@
         expiresIn: parseInt($("expiry").value, 10),
       }),
     });
-    if (!res.ok) throw new Error(`server said ${res.status}`);
+    if (!res.ok) throw await createError(res);
     const { senderToken } = await res.json();
 
     setBusy("");

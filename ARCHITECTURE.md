@@ -127,6 +127,14 @@ No accounts, so: Cloudflare WAF rate rule by IP on `POST /api/secrets`,
 message-size caps in the DO, `status` endpoint rate-limited and minimal.
 Turnstile CAPTCHA on creation is a phase-3 option if abuse appears.
 
+Storage quota (added 2026-09-25): a single global `Quota` DO. Every valid
+create reserves its worst-case bytes (body + files + GCM overhead + ~16 KB
+per SQLite object, then 16 KB for its 30-day tombstone) in an hour-bucketed
+ledger, against a 4 GB global budget (`507` past it) and 500 MB per client
+network per day (`429`; IPv6 by /64; keyed by an HMAC under a key rotated
+each UTC day, so no IP is stored). Keeps abuse from reaching the free plan's
+5 GB limit, where every write would fail.
+
 Password guessing is capped inside the DO in **both** modes (25 cumulative
 wrong attempts per secret → self-destruct + notify the sender), because a WAF
 rate rule is per-IP, distributes trivially, and never sees messages inside an

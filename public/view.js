@@ -60,7 +60,8 @@
       $("pw-row").classList.toggle("hidden", !requiresPassword);
       $("reveal-hint").textContent =
         "This is a live link: the secret sits in the sender's open browser tab — never on a server — " +
-        "and is relayed to you the moment they approve. The sender will see your request in real time.";
+        "and is relayed to you the moment they approve. The sender will see your request in real time, " +
+        "along with your approximate location (city and country, from your IP address).";
       show("reveal-card");
       return;
     }

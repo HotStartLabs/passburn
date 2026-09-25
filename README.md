@@ -102,7 +102,8 @@ built; phase 3 items (secret requests, bulk CSV, Turnstile) remain optional.
   and connection metadata, never plaintext; a claimed-but-open browser tab
   holds the plaintext until closed.
 - Limits: 100k chars of text, 5 files / 25 MB per link, 1–10 views,
-  expiry 1 hour – 7 days. Delete-on-claim plus hard expiry bound the
+  expiry 1 hour – 7 days; storage quota of 500 MB per client network per
+  day and 4 GB overall (client keys are daily-rotated HMACs, never IPs). Delete-on-claim plus hard expiry bound the
   stored-ciphertext window.
 
 ## Gotchas learned building this
@@ -364,27 +365,56 @@ rejected, stale/missing knock ids don't approve, eviction targets the oldest
 idle socket each time without overflowing, a post-burn sender reconnect gets
 `4003`, and `/` and `/s/<id>` are `no-store` while JS is not.
 
-Open:
+Follow-up (2026-09-25):
 
-- **Storage-exhaustion abuse (medium on the free plan).** The WAF rule allows
-  ~1 create/s per IP with `/chunks/` excluded, and each create may hold 25 MB
-  for 7 days — one IP can fill the 5 GB free-tier DO storage in minutes,
-  which would fail stored mode for everyone until alarms clear it. Candidate
-  fixes: a Workers Rate Limiting binding on creates that carry files (no
-  third-party script), a shorter max expiry for attachments, or Turnstile
-  (which would break `script-src 'self'`). Undecided.
-- `/live/` WebSocket connects are still not covered by the WAF rule (see the
-  2026-07-31 section) — dashboard change.
-- Not changed: live-mode recipients aren't told the sender sees their coarse
-  location; `img-src blob:` is unused; `npm audit` reports high-severity
-  `undici` advisories via `wrangler` → `miniflare` (dev toolchain only,
-  nothing shipped).
+- **Storage exhaustion (medium on the free plan) — fixed with a quota.** The
+  WAF rule allowed ~1 create/s per IP with `/chunks/` excluded, and a create
+  could hold 25 MB for 7 days, so one IP could fill the free plan's 5 GB of
+  Durable Object storage in minutes — past which *every* write fails, text
+  secrets included. The tombstones above made it worse: every
+  SQLite-backed object costs ~12 KB even nearly empty, so 1 create/s left
+  ~1 GB/day of tombstones on its own. A Workers Rate Limiting binding
+  couldn't fix this (per-location, eventually consistent, request counts not
+  bytes), and Turnstile would break `script-src 'self'`. Instead, one global
+  `Quota` Durable Object: every valid create — stored or live — reserves its
+  worst-case footprint before anything is written (body + declared file
+  bytes + GCM overhead + 16 KB per object, until it can no longer exist,
+  then 16 KB for its 30-day tombstone), in an hour-bucketed ledger.
+  - **4 GB global budget** (1 GB headroom): past it, new creates get `507`
+    and the site keeps working instead of the platform refusing writes.
+  - **500 MB per client network per day** (~19 max-size links; IPv6 grouped
+    by /64): one IP can no longer spend the global budget. Past it, `429`.
+  - No IP is stored: client keys are HMACs under a random key that is
+    replaced, with all counters, at each UTC day. The client address comes
+    from `CF-Connecting-IP`, set by the worker, never by the request.
+  - Accounting is deliberately conservative: a secret burned early still
+    counts until its expiry. Residual: an attacker with many networks can
+    still exhaust the global budget and block new creates until reservations
+    lapse (at most 7 days for bytes) — a denial of service against creation,
+    no longer against the platform or existing secrets.
+- Live-mode recipients are now told, on the reveal card, that the sender sees
+  their approximate location (city/country from IP). The 2026-09-25 Tier 2
+  review flagged the same gap as informational.
+- `img-src blob:` dropped from the CSP (nothing used it — the QR is canvas).
+- `npm audit fix`: wrangler 4.140.0, undici 7.29.0; zero advisories.
+
+Verified against `wrangler dev` with throwaway state: 19 max-size links fit a
+client's day and the 20th gets `429`; a spoofed `X-PB-Client` header is
+ignored; 30 invalid creates reserve nothing; two addresses in one IPv6 /64
+share a cap while the next /64 doesn't; the global budget refused at 163
+max-size links (4 GiB / ~26.25 MB each), then drained with small secrets
+until even a live registration got `507`. The earlier 28-check suite still
+passes with the quota in the path.
+
+Open: `/live/` WebSocket connects are still not covered by the WAF rule (see
+the 2026-07-31 section) — dashboard change.
 
 ## Costs
 
 Free tier: Workers requests plus SQLite-backed DO storage (5 GB) comfortably
-cover showcase traffic. Worst case for storage is ~200 concurrent maxed-out
-25 MB links — the alarm-based wipe keeps steady-state near zero.
+cover showcase traffic. The storage quota caps reserved bytes at 4 GB, so
+abuse can't push the account past the free-tier limit; the alarm-based wipe
+keeps steady-state near zero.
 
 ## License
 

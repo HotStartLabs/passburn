@@ -33,6 +33,20 @@ const TOMBSTONE_MS = 30 * 24 * 3600 * 1000;
 const GCM_IV_BYTES = 12;
 const GCM_TAG_BYTES = 16;
 
+// Storage quota. The free plan has 5 GB of Durable Object storage in total,
+// and past it every write fails — text secrets included. Every create
+// reserves its worst-case footprint against one global Quota object first:
+// its bytes until it can no longer exist, then a tombstone until that ends.
+// A per-client daily cap stops one network from spending the global budget;
+// the global cap keeps a many-client flood from reaching the platform limit,
+// failing new creates instead of every write.
+const QUOTA_GLOBAL_BYTES = 4 * 1024 ** 3;         // 1 GB headroom under 5 GB
+const QUOTA_CLIENT_DAILY_BYTES = 500 * 1024 ** 2; // ~19 max-size links a day
+// A SQLite-backed object costs ~12 KB even nearly empty (Cloudflare docs):
+// so does every tombstone. Rounded up for row overhead.
+const OBJECT_OVERHEAD_BYTES = 16 * 1024;
+const HOUR_MS = 3600 * 1000;
+
 // Live mode caps. Larger than stored mode because nothing rests on disk —
 // chunks pass through the DO one message at a time (pastecmd allows the same).
 const MAX_LIVE_TOTAL_FILE_BYTES = 50 * 1024 * 1024;
@@ -71,7 +85,7 @@ const securityHeaders = (isDev = false) => ({
       ? "connect-src 'self' ws://localhost:8788 ws://127.0.0.1:8788; "
       : "connect-src 'self' wss://passburn.com; ") +
     // codecanary.org: the footer integrity badge image
-    "img-src 'self' blob: https://codecanary.org; " +
+    "img-src 'self' https://codecanary.org; " +
     "base-uri 'none'; form-action 'none'; frame-ancestors 'none'; " +
     // Any future DOM-XSS sink assignment throws at runtime instead of executing.
     "require-trusted-types-for 'script'",
@@ -160,9 +174,71 @@ function validLivePayload(m) {
   return validFiles(m.files, MAX_LIVE_CHUNKS_PER_FILE, MAX_LIVE_TOTAL_FILE_BYTES);
 }
 
-export class Secret {
+// Per-client key for the daily quota. IPv6 clients are grouped by /64 —
+// one subscriber usually holds a whole /64, so per-address counting would
+// be a quota per rotation.
+function clientKey(ip) {
+  if (!ip.includes(":")) return ip;
+  const [head, tail = ""] = ip.split("::");
+  const h = head ? head.split(":") : [];
+  const t = tail ? tail.split(":") : [];
+  const groups = [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill("0"), ...t];
+  return groups.slice(0, 4).map((g) => (parseInt(g, 16) || 0).toString(16)).join(":") + "::/64";
+}
+
+// One global instance. Hour-bucketed ledger of reserved bytes by the time
+// they can no longer be stored, plus per-client daily totals. Client keys are
+// HMACs under a random key that is replaced (and the counters dropped) at
+// each UTC day: no IP is ever stored, and yesterday's keys can't be linked.
+export class Quota {
   constructor(ctx) {
     this.ctx = ctx;
+    this.sql = ctx.storage.sql;
+    this.sql.exec("CREATE TABLE IF NOT EXISTS usage (bucket INTEGER PRIMARY KEY, bytes INTEGER NOT NULL)");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS clients (k TEXT PRIMARY KEY, bytes INTEGER NOT NULL)");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS day (id INTEGER PRIMARY KEY CHECK (id = 1), day TEXT NOT NULL, key TEXT NOT NULL)");
+  }
+
+  async fetch(request) {
+    const { client, bytes, until, tomb, tombUntil } = await request.json();
+    const now = Date.now();
+    const today = new Date(now).toISOString().slice(0, 10);
+    let day = this.sql.exec("SELECT day, key FROM day WHERE id = 1").toArray()[0];
+    if (!day || day.day !== today) {
+      day = { day: today, key: b64url(crypto.getRandomValues(new Uint8Array(32))) };
+      this.sql.exec("DELETE FROM clients");
+      this.sql.exec("INSERT OR REPLACE INTO day (id, day, key) VALUES (1, ?, ?)", day.day, day.key);
+    }
+    const te = new TextEncoder();
+    const hk = await crypto.subtle.importKey(
+      "raw", te.encode(day.key), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const k = b64url(new Uint8Array(
+      await crypto.subtle.sign("HMAC", hk, te.encode(clientKey(client || "")))).subarray(0, 16));
+
+    // Synchronous from here on: nothing can interleave between the checks
+    // and the writes, so two creates can't both squeeze into the last slot.
+    const bucket = (t) => Math.ceil(t / HOUR_MS);
+    this.sql.exec("DELETE FROM usage WHERE bucket < ?", bucket(now));
+    const total = this.sql.exec("SELECT COALESCE(SUM(bytes), 0) AS n FROM usage").one().n;
+    const used = this.sql.exec("SELECT bytes FROM clients WHERE k = ?", k).toArray()[0]?.bytes ?? 0;
+    const cost = bytes + tomb;
+    if (used + cost > QUOTA_CLIENT_DAILY_BYTES) return json(429, { error: "daily quota" });
+    if (total + cost > QUOTA_GLOBAL_BYTES) return json(507, { error: "capacity" });
+    const add = "INSERT INTO usage (bucket, bytes) VALUES (?, ?) " +
+      "ON CONFLICT(bucket) DO UPDATE SET bytes = bytes + excluded.bytes";
+    this.sql.exec(add, bucket(until), bytes);
+    this.sql.exec(add, bucket(tombUntil), tomb);
+    this.sql.exec(
+      "INSERT INTO clients (k, bytes) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET bytes = bytes + excluded.bytes",
+      k, cost);
+    return json(200, {});
+  }
+}
+
+export class Secret {
+  constructor(ctx, env) {
+    this.ctx = ctx;
+    this.env = env;
   }
 
   async fetch(request) {
@@ -241,7 +317,9 @@ export class Secret {
       for (const p of pieces) { raw.set(p, off); off += p.byteLength; }
     }
 
-    if (request.method === "PUT" && rest.length === 0) return this.create(raw);
+    if (request.method === "PUT" && rest.length === 0) {
+      return this.create(raw, request.headers.get("X-PB-Client") || "");
+    }
     if (request.method === "GET" && rest[0] === "status") return this.status();
     if (request.method === "POST" && rest[0] === "claim") return this.claim(raw);
     if (rest[0] === "chunks" && FILE_ID_RE.test(rest[1] ?? "") && /^\d{1,3}$/.test(rest[2] ?? "")) {
@@ -286,11 +364,34 @@ export class Secret {
     await this.ctx.storage.setAlarm(Date.now() + TOMBSTONE_MS);
   }
 
-  async create(raw) {
-    if (await this.ctx.storage.get("meta")) return json(409, { error: "exists" });
-    if (await this.ctx.storage.get("live")) return json(409, { error: "exists" });
-    if (await this.ctx.storage.get("burned")) return json(409, { error: "exists" });
-    if (await this.ctx.storage.get("tombstone")) return json(409, { error: "exists" });
+  async exists() {
+    for (const k of ["meta", "live", "burned", "tombstone"]) {
+      if (await this.ctx.storage.get(k)) return true;
+    }
+    return false;
+  }
+
+  // Reserve this secret's worst-case storage with the global Quota before
+  // writing anything (see QUOTA_GLOBAL_BYTES). Only valid creates get here,
+  // so malformed requests can't spend anyone's budget. Returns a refusal
+  // response, or null to proceed.
+  async reserve(client, raw, body, now) {
+    const until = now + body.expiresIn * 1000 + CLAIM_GRACE_MS;
+    const files = body.mode === "live" ? [] : body.files;
+    const bytes = OBJECT_OVERHEAD_BYTES + raw.byteLength + files.reduce(
+      (n, f) => n + f.size + f.chunks * (GCM_IV_BYTES + GCM_TAG_BYTES), 0);
+    const quota = this.env.QUOTA.get(this.env.QUOTA.idFromName("global"));
+    const res = await quota.fetch("https://quota/reserve", {
+      method: "POST",
+      body: JSON.stringify({
+        client, bytes, until, tomb: OBJECT_OVERHEAD_BYTES, tombUntil: until + TOMBSTONE_MS,
+      }),
+    });
+    return res.ok ? null : json(res.status, await res.json());
+  }
+
+  async create(raw, client) {
+    if (await this.exists()) return json(409, { error: "exists" });
 
     let body;
     try {
@@ -302,6 +403,11 @@ export class Secret {
     if (err) return json(400, { error: err });
 
     const now = Date.now();
+    const refused = await this.reserve(client, raw, body, now);
+    if (refused) return refused;
+    // The quota round-trip let other requests in; nothing may have claimed
+    // this id meanwhile (only the creator knows it, but don't assume).
+    if (await this.exists()) return json(409, { error: "exists" });
     // The sender token authenticates the creating tab's WebSocket — for the
     // approve/relay flow in live mode, for viewed notifications in stored.
     const senderToken = b64url(crypto.getRandomValues(new Uint8Array(16)));
@@ -733,8 +839,12 @@ export default {
       }
       const len = parseInt(request.headers.get("Content-Length") || "0", 10);
       if (len > MAX_CREATE_BYTES) return json(413, { error: "too large" });
+      // The quota's client identity, set here so a client can't supply its
+      // own: whatever X-PB-Client arrived is overwritten.
+      const fwd = new Request(request);
+      fwd.headers.set("X-PB-Client", request.headers.get("CF-Connecting-IP") || "");
       const id = env.SECRETS.idFromName(api[1]);
-      return env.SECRETS.get(id).fetch(request);
+      return env.SECRETS.get(id).fetch(fwd);
     }
 
     // /s/<id> is the view page; the asset is static, the id and key parts are
